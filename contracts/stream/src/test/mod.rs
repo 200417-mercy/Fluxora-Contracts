@@ -44,10 +44,10 @@ mod delegation;
 mod pause;
 mod storage_keys;
 mod terminal_operations;
-mod withdraw_cancel_same_ledger;
 mod token_errors;
 mod top_up;
 mod transfer;
+mod withdraw_cancel_same_ledger;
 
 // Stage 3
 mod accounting_identity;
@@ -66,6 +66,11 @@ mod stream_ids;
 
 // Invariant: no success event emitted on a reverting token transfer (#1728).
 mod event_ordering_failed_transfer;
+
+// Issue #1699 — `stream_count()` vs. the population of stream records,
+// asserted after failed creations, after every terminal operation, under
+// deliberate counter corruption, and across randomized sequences.
+mod stream_count_consistency;
 
 // Issue #1686: every read entry point's storage/TTL behaviour, pinned to
 // docs/ABI.md. `read_methods_no_side_effects` (#1566) existed but was never
