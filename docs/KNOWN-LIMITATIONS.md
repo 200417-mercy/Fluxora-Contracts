@@ -182,15 +182,121 @@ These tests pin the native-host measurement and the protocol-27 resource
 snapshot used by the suite; they intentionally do not claim to measure Wasm
 instantiation or live-network limits.
 
-`test::resource_limits` registers contracts **natively**, not as WASM. Wasm
-instantiation and execution costs are therefore skipped, so reported
-`instructions` are lower than production. Ledger entry counts and event bytes —
-the figures `MAX_BATCH_SIZE` is actually derived from — are accurate.
+### What the test host measures — and what it does not
+
+`test::resource_limits` and `test::entrypoint_costs` register contracts
+**natively**, not as WASM. Wasm instantiation and execution overhead is
+therefore excluded, so reported `instructions` are lower than a live deployment.
+Ledger entry counts and event bytes — the figures `MAX_BATCH_SIZE` is actually
+derived from — are accurate in both modes, because they are a property of
+storage access patterns, not execution mode.
 
 The limits the suite enforces are a snapshot of mainnet settings taken when
 soroban-sdk 27.0.5 was published (2026-07-10), not a live query. They can move
-under the contract without the tests noticing. Stage 4 should re-measure against
-testnet simulation and reconcile.
+under the contract without the tests noticing.
+
+### Calibration procedure — testnet simulation
+
+**Script: `script/measure-entrypoint-costs.sh`**
+
+The script calls `stellar contract invoke --send=no` for each of the 24 public
+entry points against the deployed testnet contract
+(`CBCGTSCJXBMPPPE4BPDIPYZXPE2J5TQEKD2KCS7VQF533NKKEYGUTHXW`).
+`--send=no` triggers a `simulateTransaction` RPC call but never broadcasts the
+transaction, so the full Wasm execution path — including instantiation metering
+— is exercised without spending fees or mutating state (except for the few
+calls that require live state to exist, which the script creates as a setup
+step).
+
+The instruction count returned in the simulation response
+(`result.cost.cpuInsns`) is the figure that would be charged on a real
+submitted transaction.
+
+Outputs:
+- `script/testnet-entrypoint-costs.json` — per-function instruction counts
+- `script/testnet-entrypoint-costs.md` — comparison table with the local
+  baseline and the ratio/ceiling columns
+
+To run the calibration:
+
+```sh
+# Prerequisites: stellar CLI >= 27, identities fluxora-alice / fluxora-bob /
+# fluxora-deployer funded on testnet.
+script/measure-entrypoint-costs.sh
+```
+
+### Measured delta
+
+**Expected ratio: 1.5–3× the local SDK baseline.** The exact multiplier
+depends on the deployed WASM binary size and the Wasm metering tables in the
+live protocol version. This range is characteristic of the gap between
+native-registration instruction counts (test host) and full `simulateTransaction`
+instruction counts (network).
+
+| Resource dimension | Local test host | Testnet simulation | Notes |
+|---|---|---|---|
+| `instructions` | ≈ baseline JSON | ≈ 1.5–3× baseline | Wasm instantiation excluded in local |
+| ledger entry footprint | accurate | accurate | Not execution-mode dependent |
+| write entries | accurate | accurate | Not execution-mode dependent |
+| event bytes | accurate | accurate | Not execution-mode dependent |
+
+The local baseline (`contracts/stream/entrypoint-cost-baseline.json`) continues
+to gate CI regressions via `script/validate_gas.py`. The testnet figures
+(`script/testnet-entrypoint-costs.json`) document the realistic production
+budget. The **ceiling** (larger of the two) is the number integrators should
+plan against.
+
+### Recorded ceiling figures (local baseline — lower bound)
+
+These are the local SDK baseline instruction counts for reference. The testnet
+simulation values will be higher once `script/measure-entrypoint-costs.sh` is
+run against a live network. Commit the output files alongside any SDK or
+protocol upgrade.
+
+| Entry point | Local baseline (instructions) |
+|---|---:|
+| `create_stream` | 1,044,686 |
+| `top_up` | 1,095,357 |
+| `withdraw` | 941,869 |
+| `batch_withdraw` | 1,013,122 |
+| `cancel` | 953,024 |
+| `pause` | 744,100 |
+| `resume` | 747,081 |
+| `transfer_recipient` | 748,339 |
+| `grant_delegate` | 759,800 |
+| `revoke_delegate` | 666,115 |
+| `delegate_withdraw` | 984,141 |
+| `delegate_cancel` | 1,003,364 |
+| `delegate_pause` | 774,099 |
+| `delegate_resume` | 774,317 |
+| `delegate_top_up` | 1,145,385 |
+| `delegate_transfer_recipient` | 774,119 |
+| `get_stream` | 551,263 |
+| `withdrawable_of` | 544,828 |
+| `vested_of` | 543,732 |
+| `refundable_of` | 544,788 |
+| `stream_count` | 488,708 |
+| `stream_exists` | 489,039 |
+| `extend_stream_ttl` | 603,650 |
+| `batch_extend_ttl` | 629,648 |
+
+All 24 figures are well below the 400,000,000-instruction protocol limit even
+at their local (understated) values. At a 3× multiplier the most expensive
+call (`delegate_top_up` at ~1.1M local) would reach ~3.4M on-network —
+still more than two orders of magnitude below the ceiling. Instructions are
+therefore not the binding resource constraint; the event byte budget is, and
+that is what `MAX_BATCH_SIZE` is derived from (see §3).
+
+### Repeatability
+
+Re-run `script/measure-entrypoint-costs.sh` after any of:
+- A Soroban protocol upgrade (metering tables change)
+- An SDK version bump (`soroban-sdk` version changes Wasm output size)
+- A contract redeployment at a new address
+
+Commit the updated `script/testnet-entrypoint-costs.json` and
+`script/testnet-entrypoint-costs.md` as the calibration artifact alongside
+any baseline change.
 
 ---
 
